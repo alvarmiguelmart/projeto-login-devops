@@ -1,0 +1,15 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Instalar nodemon globalmente para hot reload
+RUN npm install -g nodemon
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000 9229
+
+CMD ["nodemon", "--inspect=0.0.0.0:9229", "server.js"]

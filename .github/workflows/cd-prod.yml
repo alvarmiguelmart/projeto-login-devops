@@ -1,0 +1,76 @@
+name: CD Production
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER: auth-system-prod
+  K8S_NAMESPACE: auth-system
+
+jobs:
+  deploy:
+    name: Deploy para Produção
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
+    
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Install Helm
+      uses: azure/setup-helm@v3
+    
+    - name: Decrypt secrets
+      run: |
+        gpg --quiet --batch --yes --decrypt --passphrase="${{ secrets.GPG_PASSPHRASE }}" \
+        --output k8s/secrets.yaml k8s/secrets.yaml.gpg
+    
+    - name: Deploy to Kubernetes
+      run: |
+        # Aplicar configurações
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/configmap.yaml
+        kubectl apply -f k8s/secrets.yaml
+        kubectl apply -f k8s/
+        
+        # Aguardar rollout
+        kubectl rollout status deployment/backend -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+        kubectl rollout status deployment/frontend -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+    
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+        kubectl get svc -n ${{ env.K8S_NAMESPACE }}
+        kubectl get ingress -n ${{ env.K8S_NAMESPACE }}
+    
+    - name: Smoke tests
+      run: |
+        curl -fk https://api.auth-system.com/health || exit 1
+        curl -fk https://auth-system.com || exit 1
+    
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
